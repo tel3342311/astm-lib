@@ -4,43 +4,50 @@ using AstmLib.Utilities;
 using AstmLib.Validation;
 using System.Text;
 
-namespace AstmLib.Protocols.Astm1394;
+namespace AstmLib.Protocols.ClsiLis02;
 
 /// <summary>
-/// Implementation of ASTM E1394 protocol for clinical laboratory instrument communication
+/// Implementation of CLSI LIS02-A2 protocol for clinical laboratory instrument communication
+/// Enhanced version of LIS01 with additional features and stricter validation
 /// </summary>
-public class Astm1394Protocol : IAstmProtocol
+public class ClsiLis02Protocol : IAstmProtocol
 {
     private readonly ChecksumCalculator _checksumCalculator;
+    private readonly bool _enforceStrictValidation;
     
     /// <summary>
     /// The protocol version identifier
     /// </summary>
-    public string ProtocolVersion => "ASTM E1394-97";
+    public string ProtocolVersion => "CLSI LIS02-A2";
     
     /// <summary>
-    /// Initializes the ASTM 1394 protocol with standard checksum calculation
+    /// Initializes the CLSI LIS02 protocol with standard checksum calculation
     /// </summary>
-    public Astm1394Protocol() : this(DeviceType.Standard)
+    /// <param name="enforceStrictValidation">Whether to enforce strict LIS02 validation rules</param>
+    public ClsiLis02Protocol(bool enforceStrictValidation = true) : this(DeviceType.Standard, enforceStrictValidation)
     {
     }
     
     /// <summary>
-    /// Initializes the ASTM 1394 protocol with device-specific checksum calculation
+    /// Initializes the CLSI LIS02 protocol with device-specific checksum calculation
     /// </summary>
     /// <param name="deviceType">Type of device for checksum calculation</param>
-    public Astm1394Protocol(DeviceType deviceType)
+    /// <param name="enforceStrictValidation">Whether to enforce strict LIS02 validation rules</param>
+    public ClsiLis02Protocol(DeviceType deviceType, bool enforceStrictValidation = true)
     {
         _checksumCalculator = ChecksumCalculator.CreateFor(deviceType);
+        _enforceStrictValidation = enforceStrictValidation;
     }
     
     /// <summary>
-    /// Initializes the ASTM 1394 protocol with custom checksum calculator
+    /// Initializes the CLSI LIS02 protocol with custom checksum calculator
     /// </summary>
     /// <param name="checksumCalculator">Custom checksum calculator</param>
-    public Astm1394Protocol(ChecksumCalculator checksumCalculator)
+    /// <param name="enforceStrictValidation">Whether to enforce strict LIS02 validation rules</param>
+    public ClsiLis02Protocol(ChecksumCalculator checksumCalculator, bool enforceStrictValidation = true)
     {
         _checksumCalculator = checksumCalculator ?? throw new ArgumentNullException(nameof(checksumCalculator));
+        _enforceStrictValidation = enforceStrictValidation;
     }
     
     /// <summary>
@@ -74,7 +81,12 @@ public class Astm1394Protocol : IAstmProtocol
             
             if (!isValid)
             {
-                throw new InvalidOperationException($"Invalid frame checksum: {frame}");
+                if (_enforceStrictValidation)
+                {
+                    throw new InvalidOperationException($"Invalid frame checksum: {frame}");
+                }
+                // In non-strict mode, log warning but continue processing
+                continue;
             }
             
             // Parse the content into message
@@ -98,12 +110,16 @@ public class Astm1394Protocol : IAstmProtocol
     }
     
     /// <summary>
-    /// Serializes ASTM messages into string format
+    /// Serializes ASTM messages into string format with LIS02 enhancements
     /// </summary>
     public async Task<string> SerializeToStringAsync(IEnumerable<IAstmMessage> messages, CancellationToken cancellationToken = default)
     {
         var result = new StringBuilder();
         var frameNumber = 1;
+        
+        // LIS02 enhancement: Add session start marker
+        result.Append(ControlCharacters.ENQ);
+        result.Append(ControlCharacters.CRLF);
         
         foreach (var message in messages)
         {
@@ -118,11 +134,14 @@ public class Astm1394Protocol : IAstmProtocol
             frameNumber = (frameNumber % ControlCharacters.MaxFrameSequence) + 1;
         }
         
+        // LIS02 enhancement: Add session end marker
+        result.Append(ControlCharacters.EOT);
+        
         return result.ToString();
     }
     
     /// <summary>
-    /// Validates a collection of ASTM messages according to protocol specifications
+    /// Validates a collection of ASTM messages according to CLSI LIS02 specifications
     /// </summary>
     public async Task<ValidationResult> ValidateAsync(IEnumerable<IAstmMessage> messages, CancellationToken cancellationToken = default)
     {
@@ -148,6 +167,16 @@ public class Astm1394Protocol : IAstmProtocol
         if (lastMessage.RecordType != "L")
         {
             errors.Add("Last message must be a Terminator record (L)");
+        }
+        
+        // CLSI LIS02-specific validation: Enhanced record ordering and relationships
+        ValidateRecordOrdering(messageList, errors, warnings);
+        ValidateRecordRelationships(messageList, errors, warnings);
+        
+        // LIS02 enhancement: Check for required sequence numbers
+        if (_enforceStrictValidation)
+        {
+            ValidateSequenceNumbers(messageList, errors, warnings);
         }
         
         // Validate individual messages
@@ -185,7 +214,7 @@ public class Astm1394Protocol : IAstmProtocol
                 $"Frame number must be between 1 and {ControlCharacters.MaxFrameSequence}");
         }
         
-        // ASTM frame format: STX + frame_number + content + ETX + checksum
+        // CLSI LIS02 frame format: STX + frame_number + content + ETX + checksum
         var frameContent = frameNumber.ToString() + content;
         var checksumContent = frameContent + ControlCharacters.ETX;
         var checksum = CalculateChecksum(checksumContent);
@@ -254,6 +283,115 @@ public class Astm1394Protocol : IAstmProtocol
     }
     
     /// <summary>
+    /// Validates record ordering according to CLSI LIS02 specifications
+    /// </summary>
+    private void ValidateRecordOrdering(List<IAstmMessage> messages, List<string> errors, List<string> warnings)
+    {
+        var expectedSequence = new[] { "H", "P", "O", "R", "C", "L" };
+        var currentIndex = 0;
+        
+        foreach (var message in messages)
+        {
+            var recordType = message.RecordType;
+            
+            // Find the record type in the expected sequence
+            var typeIndex = Array.IndexOf(expectedSequence, recordType);
+            
+            if (typeIndex == -1)
+            {
+                if (_enforceStrictValidation)
+                {
+                    errors.Add($"Unknown record type: {recordType}");
+                }
+                else
+                {
+                    warnings.Add($"Unknown record type: {recordType}");
+                }
+                continue;
+            }
+            
+            // LIS02 strict ordering validation
+            if (_enforceStrictValidation && typeIndex < currentIndex)
+            {
+                // Allow multiple instances of certain types
+                if (recordType != "P" && recordType != "O" && recordType != "R" && recordType != "C")
+                {
+                    errors.Add($"Record type {recordType} appears out of sequence");
+                }
+            }
+            
+            currentIndex = Math.Max(currentIndex, typeIndex);
+        }
+    }
+    
+    /// <summary>
+    /// Validates relationships between records according to CLSI LIS02
+    /// </summary>
+    private void ValidateRecordRelationships(List<IAstmMessage> messages, List<string> errors, List<string> warnings)
+    {
+        var hasPatient = false;
+        var hasOrder = false;
+        var hasResult = false;
+        
+        foreach (var message in messages)
+        {
+            switch (message.RecordType)
+            {
+                case "P":
+                    hasPatient = true;
+                    break;
+                case "O":
+                    hasOrder = true;
+                    if (!hasPatient && _enforceStrictValidation)
+                    {
+                        errors.Add("Order record (O) must be preceded by Patient record (P)");
+                    }
+                    break;
+                case "R":
+                    hasResult = true;
+                    if (!hasOrder && _enforceStrictValidation)
+                    {
+                        errors.Add("Result record (R) must be preceded by Order record (O)");
+                    }
+                    break;
+                case "C":
+                    // Comments can follow any record type
+                    break;
+            }
+        }
+        
+        // LIS02 recommendation: Results should have corresponding orders
+        if (hasResult && !hasOrder)
+        {
+            warnings.Add("Result records found without corresponding Order records");
+        }
+    }
+    
+    /// <summary>
+    /// Validates sequence numbers for CLSI LIS02 compliance
+    /// </summary>
+    private void ValidateSequenceNumbers(List<IAstmMessage> messages, List<string> errors, List<string> warnings)
+    {
+        var expectedSequence = 1;
+        
+        foreach (var message in messages)
+        {
+            if (message.SequenceNumber != expectedSequence)
+            {
+                if (_enforceStrictValidation)
+                {
+                    errors.Add($"Sequence number mismatch: expected {expectedSequence}, found {message.SequenceNumber}");
+                }
+                else
+                {
+                    warnings.Add($"Sequence number gap: expected {expectedSequence}, found {message.SequenceNumber}");
+                }
+            }
+            expectedSequence = message.SequenceNumber + 1;
+        }
+    }
+    
+    /// <summary>
     /// Extracts individual frames from raw data
     /// </summary>
     private List<string> ExtractFrames(string data)
@@ -261,8 +399,20 @@ public class Astm1394Protocol : IAstmProtocol
         var frames = new List<string>();
         var currentPos = 0;
         
+        // Skip session markers (ENQ at start, EOT at end)
+        if (data.StartsWith(ControlCharacters.ENQ))
+        {
+            currentPos = data.IndexOf(ControlCharacters.CRLF, 0) + 2;
+        }
+        
         while (currentPos < data.Length)
         {
+            // Stop if we hit EOT
+            if (currentPos < data.Length && data[currentPos] == ControlCharacters.EOT[0])
+            {
+                break;
+            }
+            
             // Find next STX
             var stxIndex = data.IndexOf(ControlCharacters.STX, currentPos);
             if (stxIndex == -1)
@@ -280,6 +430,13 @@ public class Astm1394Protocol : IAstmProtocol
                 var frame = data.Substring(stxIndex, frameLength);
                 frames.Add(frame);
                 currentPos = etxIndex + 3;
+                
+                // Skip CRLF after frame
+                if (currentPos + 1 < data.Length && 
+                    data.Substring(currentPos, 2) == ControlCharacters.CRLF)
+                {
+                    currentPos += 2;
+                }
             }
             else
             {

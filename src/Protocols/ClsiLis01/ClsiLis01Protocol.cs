@@ -4,41 +4,42 @@ using AstmLib.Utilities;
 using AstmLib.Validation;
 using System.Text;
 
-namespace AstmLib.Protocols.Astm1394;
+namespace AstmLib.Protocols.ClsiLis01;
 
 /// <summary>
-/// Implementation of ASTM E1394 protocol for clinical laboratory instrument communication
+/// Implementation of CLSI LIS01-A2 protocol for clinical laboratory instrument communication
+/// Based on ASTM E1394 with CLSI-specific modifications
 /// </summary>
-public class Astm1394Protocol : IAstmProtocol
+public class ClsiLis01Protocol : IAstmProtocol
 {
     private readonly ChecksumCalculator _checksumCalculator;
     
     /// <summary>
     /// The protocol version identifier
     /// </summary>
-    public string ProtocolVersion => "ASTM E1394-97";
+    public string ProtocolVersion => "CLSI LIS01-A2";
     
     /// <summary>
-    /// Initializes the ASTM 1394 protocol with standard checksum calculation
+    /// Initializes the CLSI LIS01 protocol with standard checksum calculation
     /// </summary>
-    public Astm1394Protocol() : this(DeviceType.Standard)
+    public ClsiLis01Protocol() : this(DeviceType.Standard)
     {
     }
     
     /// <summary>
-    /// Initializes the ASTM 1394 protocol with device-specific checksum calculation
+    /// Initializes the CLSI LIS01 protocol with device-specific checksum calculation
     /// </summary>
     /// <param name="deviceType">Type of device for checksum calculation</param>
-    public Astm1394Protocol(DeviceType deviceType)
+    public ClsiLis01Protocol(DeviceType deviceType)
     {
         _checksumCalculator = ChecksumCalculator.CreateFor(deviceType);
     }
     
     /// <summary>
-    /// Initializes the ASTM 1394 protocol with custom checksum calculator
+    /// Initializes the CLSI LIS01 protocol with custom checksum calculator
     /// </summary>
     /// <param name="checksumCalculator">Custom checksum calculator</param>
-    public Astm1394Protocol(ChecksumCalculator checksumCalculator)
+    public ClsiLis01Protocol(ChecksumCalculator checksumCalculator)
     {
         _checksumCalculator = checksumCalculator ?? throw new ArgumentNullException(nameof(checksumCalculator));
     }
@@ -122,7 +123,7 @@ public class Astm1394Protocol : IAstmProtocol
     }
     
     /// <summary>
-    /// Validates a collection of ASTM messages according to protocol specifications
+    /// Validates a collection of ASTM messages according to CLSI LIS01 specifications
     /// </summary>
     public async Task<ValidationResult> ValidateAsync(IEnumerable<IAstmMessage> messages, CancellationToken cancellationToken = default)
     {
@@ -149,6 +150,9 @@ public class Astm1394Protocol : IAstmProtocol
         {
             errors.Add("Last message must be a Terminator record (L)");
         }
+        
+        // CLSI LIS01-specific validation: Check for proper record ordering
+        ValidateRecordOrdering(messageList, errors, warnings);
         
         // Validate individual messages
         foreach (var message in messageList)
@@ -185,7 +189,7 @@ public class Astm1394Protocol : IAstmProtocol
                 $"Frame number must be between 1 and {ControlCharacters.MaxFrameSequence}");
         }
         
-        // ASTM frame format: STX + frame_number + content + ETX + checksum
+        // CLSI LIS01 frame format: STX + frame_number + content + ETX + checksum
         var frameContent = frameNumber.ToString() + content;
         var checksumContent = frameContent + ControlCharacters.ETX;
         var checksum = CalculateChecksum(checksumContent);
@@ -251,6 +255,48 @@ public class Astm1394Protocol : IAstmProtocol
     public string CalculateChecksum(string content)
     {
         return _checksumCalculator.Calculate(content);
+    }
+    
+    /// <summary>
+    /// Validates record ordering according to CLSI LIS01 specifications
+    /// </summary>
+    private void ValidateRecordOrdering(List<IAstmMessage> messages, List<string> errors, List<string> warnings)
+    {
+        var expectedSequence = new[] { "H", "P", "O", "R", "C", "L" };
+        var currentIndex = 0;
+        
+        foreach (var message in messages)
+        {
+            var recordType = message.RecordType;
+            
+            // Find the record type in the expected sequence
+            var typeIndex = Array.IndexOf(expectedSequence, recordType);
+            
+            if (typeIndex == -1)
+            {
+                warnings.Add($"Unexpected record type: {recordType}");
+                continue;
+            }
+            
+            // Check if the record type appears in correct order
+            if (typeIndex < currentIndex)
+            {
+                // Allow multiple instances of the same type or later types
+                if (recordType == "P" || recordType == "O" || recordType == "R" || recordType == "C")
+                {
+                    // These can appear multiple times
+                    continue;
+                }
+                else
+                {
+                    warnings.Add($"Record type {recordType} appears out of sequence");
+                }
+            }
+            else
+            {
+                currentIndex = typeIndex;
+            }
+        }
     }
     
     /// <summary>
