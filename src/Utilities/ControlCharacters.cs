@@ -57,9 +57,9 @@ public static class ControlCharacters
     public static readonly string ETB = char.ConvertFromUtf32(23);
     
     /// <summary>
-    /// FS (File Separator) - ASCII 28 - Field separator in ASTM messages
+    /// FS (Field Separator) - Pipe character | - Field separator in ASTM messages
     /// </summary>
-    public static readonly string FS = char.ConvertFromUtf32(28);
+    public static readonly string FS = "|";
     
     /// <summary>
     /// GS (Group Separator) - ASCII 29 - Component separator within fields

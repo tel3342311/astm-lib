@@ -15,9 +15,9 @@ public class HeaderRecord : AstmMessage
     
     /// <summary>
     /// Delimiter definition (Field 2) - defines field separators used in the message
-    /// Default: ^&amp;\r (field^component&amp;repeat\r)
+    /// Default: \\^& (field separator, component separator, repeat separator)
     /// </summary>
-    public string DelimiterDefinition { get; set; } = @"^&\r";
+    public string DelimiterDefinition { get; set; } = @"\^&";
     
     /// <summary>
     /// Message control ID (Field 3) - unique identifier for this message

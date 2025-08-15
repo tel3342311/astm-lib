@@ -97,7 +97,7 @@ public abstract class AstmMessage : IAstmMessage
         if (string.IsNullOrEmpty(fieldString))
             return Array.Empty<string>();
             
-        return fieldString.Split(Utilities.ControlCharacters.FS[0]);
+        return fieldString.Split('|');
     }
     
     /// <summary>
